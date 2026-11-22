@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Дом по эскизу в 3D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600&family=Golos+Text:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#EDF1F7; --ground:#E3E9F2; --grid:#C3CEE3;
+  --panel:rgba(255,255,255,.9); --text:#1D2340; --muted:#596182;
+  --ink:#27348B; --btn:#FFFFFF; --btn-line:#CBD3E6; --on-ink:#FFFFFF;
+  color-scheme: light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#131A2B; --ground:#182035; --grid:#2A3658;
+    --panel:rgba(25,32,54,.9); --text:#E6EAF7; --muted:#9BA4C4;
+    --ink:#9AACFF; --btn:#1F2844; --btn-line:#34406A; --on-ink:#131A2B;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#131A2B; --ground:#182035; --grid:#2A3658;
+  --panel:rgba(25,32,54,.9); --text:#E6EAF7; --muted:#9BA4C4;
+  --ink:#9AACFF; --btn:#1F2844; --btn-line:#34406A; --on-ink:#131A2B;
+  color-scheme: dark;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0;overflow:hidden}
+body{background:var(--bg);color:var(--text);font-family:"Golos Text",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+canvas#scene{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+
+.top{position:fixed;top:0;left:0;right:0;padding:calc(env(safe-area-inset-top,0px) + 12px) 12px 0;pointer-events:none;display:flex}
+.card{pointer-events:auto;background:var(--panel);border:1px solid var(--btn-line);border-radius:14px;padding:12px 16px 13px;max-width:min(420px,100%);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.card h1{margin:0;font-family:Caveat,"Segoe Print",cursive;font-weight:600;font-size:34px;line-height:1;color:var(--ink);letter-spacing:.2px}
+.card p{margin:6px 0 0;font-size:14px;line-height:1.4;color:var(--muted)}
+.card p strong{color:var(--text);font-weight:600}
+
+.bottom{position:fixed;bottom:0;left:0;right:0;padding:0 12px calc(env(safe-area-inset-bottom,0px) + 14px);pointer-events:none;display:flex;flex-direction:column;align-items:center;gap:8px}
+.bar{pointer-events:auto;display:flex;flex-wrap:wrap;justify-content:center;gap:6px;background:var(--panel);border:1px solid var(--btn-line);border-radius:16px;padding:6px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.bar button{font:500 15px/1 "Golos Text",system-ui,sans-serif;color:var(--text);background:var(--btn);border:1px solid var(--btn-line);border-radius:11px;padding:11px 14px;cursor:pointer;min-height:42px}
+.bar button[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--on-ink)}
+.bar button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.hint{pointer-events:none;font-size:13px;color:var(--muted);text-align:center;background:var(--panel);padding:5px 10px;border-radius:999px;transition:opacity .6s}
+.hint.gone{opacity:0}
+.err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;color:var(--text)}
+</style>
+</head>
+<body>
+<canvas id="scene" aria-label="3D-модель дома"></canvas>
+
+<div class="top">
+  <div class="card">
+    <h1>Дом по эскизу</h1>
+    <p><strong id="area">Около 236 м²</strong> без террасы: зал, кухня, три спальни, холл с аркой. Размеры примерные, одна клетка эскиза — 50 см.</p>
+  </div>
+</div>
+
+<div class="bottom">
+  <div class="hint" id="hint">Вращайте пальцем или мышью, приближайте щипком или колёсиком</div>
+  <div class="bar" role="toolbar" aria-label="Вид модели">
+    <button id="b3d" aria-pressed="true">Объём</button>
+    <button id="btop" aria-pressed="false">Сверху</button>
+    <button id="bcut" aria-pressed="false">Низкие стены</button>
+  </div>
+</div>
+<div class="err" id="err">Не удалось загрузить 3D. Проверьте интернет и обновите страницу.</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(function(){
+if(!window.THREE || !THREE.OrbitControls){document.getElementById('err').style.display='flex';return;}
+
+const FLOOR=0.45, H=2.9, EXT=0.3, INT=0.14;
+const INK=0x27348B;
+const reduceMotion=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const cssVar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+/* ---------- renderer / scene ---------- */
+const canvas=document.getElementById('scene');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+renderer.outputEncoding=THREE.sRGBEncoding;
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(42,1,0.1,400);
+const controls=new THREE.OrbitControls(camera,canvas);
+controls.enableDamping=true;
+controls.dampingFactor=0.08;
+controls.maxPolarAngle=Math.PI/2-0.06;
+controls.minDistance=5;
+controls.maxDistance=80;
+controls.target.set(0,1,0);
+
+scene.add(new THREE.HemisphereLight(0xffffff,0xb8c0d0,0.75));
+const sun=new THREE.DirectionalLight(0xffffff,0.85);
+sun.position.set(14,26,12);
+sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048);
+Object.assign(sun.shadow.camera,{left:-20,right:20,top:20,bottom:-20,near:1,far:80});
+sun.shadow.bias=-0.0004;
+sun.shadow.normalBias=0.02;
+scene.add(sun);
+
+/* ground like graph paper */
+const groundMat=new THREE.MeshStandardMaterial({color:0xe3e9f2,roughness:1});
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(90,90),groundMat);
+ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; scene.add(ground);
+let grid=null;
+function applyTheme(){
+  const bg=new THREE.Color(cssVar('--bg')||'#EDF1F7');
+  scene.background=bg;
+  scene.fog=new THREE.Fog(bg,45,95);
+  groundMat.color.set(cssVar('--ground')||'#E3E9F2');
+  if(grid){scene.remove(grid);grid.geometry.dispose();}
+  const gc=new THREE.Color(cssVar('--grid')||'#C3CEE3');
+  grid=new THREE.GridHelper(90,180,gc,gc);
+  grid.position.y=0.003; grid.material.transparent=true; grid.material.opacity=0.7;
+  scene.add(grid);
+}
+applyTheme();
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',applyTheme);
+
+/* ---------- house ---------- */
+const house=new THREE.Group();
+house.position.set(-6.45,0,-9.7);
+scene.add(house);
+
+const capMat=new THREE.MeshStandardMaterial({color:0xF7F5F0,roughness:.92});
+const inkMat=new THREE.MeshStandardMaterial({color:INK,roughness:.7});
+const glassMat=new THREE.MeshStandardMaterial({color:0x9DC2E8,roughness:.1,metalness:.1,transparent:true,opacity:.45,side:THREE.DoubleSide});
+const plinthMat=new THREE.MeshStandardMaterial({color:0xBFB7A8,roughness:1});
+const floorCols={wood:0xD9C09A,tile:0xD8E0E7,tileWarm:0xE4DACB,stone:0xCAC4B8};
+const floorMats={};
+for(const k in floorCols) floorMats[k]=new THREE.MeshStandardMaterial({color:floorCols[k],roughness:.85});
+
+const win=(a,b,sill=0.9,top=2.15)=>({type:'window',a,b,sill,top});
+const door=(a,b,top=2.1)=>({type:'door',a,b,top});
+const arch=(a,b,spring)=>({type:'arch',a,b,spring});
+
+const walls=[];
+function wall(x1,z1,x2,z2,t,ops){
+  const dx=x2-x1, dz=z2-z1, L0=Math.hypot(dx,dz), ux=dx/L0, uz=dz/L0;
+  const off=t/2, L=L0+t;
+  const shape=new THREE.Shape();
+  shape.moveTo(0,0);
+  const notches=ops.filter(o=>o.type!=='window').sort((p,q)=>p.a-q.a);
+  for(const o of notches){
+    const a=o.a+off, b=o.b+off;
+    shape.lineTo(a,0);
+    if(o.type==='arch'){
+      const r=(b-a)/2;
+      shape.lineTo(a,o.spring);
+      shape.absarc(a+r,o.spring,r,Math.PI,0,true);
+      shape.lineTo(b,0);
+    }else{
+      shape.lineTo(a,o.top); shape.lineTo(b,o.top); shape.lineTo(b,0);
+    }
+  }
+  shape.lineTo(L,0); shape.lineTo(L,H); shape.lineTo(0,H);
+  const g=new THREE.Group();
+  for(const o of ops.filter(o=>o.type==='window')){
+    const a=o.a+off, b=o.b+off;
+    const p=new THREE.Path();
+    p.moveTo(a,o.sill); p.lineTo(b,o.sill); p.lineTo(b,o.top); p.lineTo(a,o.top); p.lineTo(a,o.sill);
+    shape.holes.push(p);
+    const gl=new THREE.Mesh(new THREE.PlaneGeometry(b-a,o.top-o.sill),glassMat);
+    gl.position.set((a+b)/2,(o.sill+o.top)/2,0);
+    g.add(gl);
+  }
+  const geo=new THREE.ExtrudeGeometry(shape,{depth:t,bevelEnabled:false,curveSegments:28});
+  geo.translate(0,0,-t/2);
+  const m=new THREE.Mesh(geo,[capMat,inkMat]);
+  m.castShadow=true; m.receiveShadow=true;
+  g.add(m);
+  g.position.set(x1-ux*off,FLOOR,z1-uz*off);
+  g.rotation.y=Math.atan2(-dz,dx);
+  house.add(g); walls.push(g);
+}
+
+/* outer walls */
+wall(0,0,13.2,0,EXT,[win(1.4,3.0),win(4.0,5.6),win(9.6,10.6,1.5,2.15)]);
+wall(13.2,0,13.2,7,EXT,[win(4.0,5.6)]);
+wall(13.2,7,15.3,7,EXT,[win(0.6,1.7)]);
+wall(15.3,7,15.3,11.4,EXT,[win(1.4,3.0)]);
+wall(15.3,11.4,13.2,11.4,EXT,[]);
+wall(13.2,11.4,13.2,16,EXT,[win(1.5,3.1)]);
+wall(13.2,16,4.5,16,EXT,[win(1.2,2.7),door(5.5,6.3)]);
+wall(4.5,16,4.5,19.4,EXT,[door(1.0,1.9)]);
+wall(4.5,19.4,0,19.4,EXT,[win(1.5,3.0)]);
+wall(0,19.4,0,0,EXT,[win(1.4,2.9),win(4.9,6.4),door(9.6,10.8,2.3),win(13.5,15.0),win(16.1,17.6)]);
+/* inner walls */
+wall(0,7,6.8,7,INT,[door(1.0,2.6,2.3)]);
+wall(6.8,0,6.8,7,INT,[]);
+wall(6.8,4.4,9,4.4,INT,[door(0.6,1.4)]);
+wall(9,0,9,7,INT,[]);
+wall(6.8,7,9,7,INT,[door(0.6,1.4)]);
+wall(11.2,0,11.2,2.6,INT,[]);
+wall(9,2.6,13.2,2.6,INT,[door(0.5,1.3),door(2.6,3.4)]);
+wall(9,7,13.2,7,INT,[door(0.8,1.7)]);
+wall(6.8,7,6.8,11.4,INT,[arch(1.2,3.2,1.7)]);
+wall(11.2,7,11.2,11.4,INT,[door(1.6,2.5)]);
+wall(9,11.4,13.2,11.4,INT,[door(0.6,1.5)]);
+wall(0,11.4,4.5,11.4,INT,[door(1.0,2.0)]);
+wall(4.5,11.4,6.8,11.4,INT,[]);
+wall(4.5,11.4,4.5,16,INT,[door(2.6,3.4)]);
+wall(6.8,11.4,6.8,16,INT,[]);
+wall(9,11.4,9,16,INT,[]);
+
+/* floors + labels */
+const ROOMS=[
+  {n:'Зал',x:[0,6.8],z:[0,7],f:'wood'},
+  {n:'Ванная',x:[6.8,9],z:[0,4.4],f:'tile',s:.75},
+  {n:'Чулан',x:[6.8,9],z:[4.4,7],f:'wood',s:.7},
+  {n:'Ванна',x:[9,11.2],z:[0,2.6],f:'tile',s:.68},
+  {n:'Гардероб',x:[11.2,13.2],z:[0,2.6],f:'wood',s:.62},
+  {n:'Спальня',x:[9,13.2],z:[2.6,7],f:'wood'},
+  {n:'Холл',x:[0,6.8],z:[7,11.4],f:'wood',lx:3.4,lz:9.2,extra:[6.8,11.2,7,11.4]},
+  {n:null,x:[6.8,11.2],z:[7,11.4],f:'wood'},
+  {n:'Спальня',x:[11.2,15.3],z:[7,11.4],f:'wood'},
+  {n:'Кухня',x:[0,4.5],z:[11.4,19.4],f:'tileWarm'},
+  {n:'Кладовая',x:[4.5,6.8],z:[11.4,16],f:'wood',s:.66},
+  {n:'Лестница',x:[6.8,9],z:[11.4,16],f:'wood',s:.6,lx:7.4,lz:15.3,noArea:true},
+  {n:'Спальня',x:[9,13.2],z:[11.4,16],f:'wood'},
+  {n:'Терраса',x:[4.5,13.2],z:[16,19.4],f:'stone',terrace:true}
+];
+const labels=new THREE.Group(); house.add(labels);
+let total=0;
+function labelSprite(name,sub,s){
+  const c=document.createElement('canvas'); c.width=512; c.height=256;
+  const g=c.getContext('2d');
+  g.textAlign='center';
+  g.fillStyle='#27348B';
+  g.font='600 112px Caveat, "Segoe Print", cursive';
+  g.fillText(name,256,128);
+  if(sub){
+    g.font='500 46px "Golos Text", system-ui, sans-serif';
+    g.fillStyle='rgba(39,52,139,.78)';
+    g.fillText(sub,256,198);
+  }
+  const tex=new THREE.CanvasTexture(c);
+  tex.encoding=THREE.sRGBEncoding; tex.anisotropy=4;
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,depthTest:false,transparent:true}));
+  sp.scale.set(2.8*s,1.4*s,1); sp.renderOrder=20;
+  return sp;
+}
+for(const r of ROOMS){
+  const w=r.x[1]-r.x[0], d=r.z[1]-r.z[0];
+  const top=r.terrace?FLOOR-0.06:FLOOR;
+  const mats=[plinthMat,plinthMat,floorMats[r.f],plinthMat,plinthMat,plinthMat];
+  const fm=new THREE.Mesh(new THREE.BoxGeometry(w,top,d),mats);
+  fm.position.set(r.x[0]+w/2,top/2,r.z[0]+d/2);
+  fm.receiveShadow=true; house.add(fm);
+  let area=w*d;
+  if(r.extra) area+=(r.extra[1]-r.extra[0])*(r.extra[3]-r.extra[2]);
+  if(!r.terrace && r.n!==null) total+=area;
+  r._area=area;
+}
+document.getElementById('area').textContent='Около '+Math.round(total)+' м²';
+function buildLabels(){
+  while(labels.children.length) labels.remove(labels.children[0]);
+  for(const r of ROOMS){
+    if(!r.n) continue;
+    const sp=labelSprite(r.n,r.noArea?'':'≈ '+Math.round(r._area)+' м²',r.s||1);
+    sp.position.set(r.lx!=null?r.lx:(r.x[0]+r.x[1])/2,FLOOR+0.7,r.lz!=null?r.lz:(r.z[0]+r.z[1])/2);
+    labels.add(sp);
+  }
+}
+
+/* stairs to upper floor */
+const stairMat=new THREE.MeshStandardMaterial({color:0xB99A6E,roughness:.8});
+for(let i=0;i<12;i++){
+  const h=FLOOR+0.24*(i+1), z0=11.6+i*0.28;
+  const st=new THREE.Mesh(new THREE.BoxGeometry(1.15,h,0.28),stairMat);
+  st.position.set(8.4,h/2,z0+0.14); st.castShadow=true; st.receiveShadow=true; house.add(st);
+}
+
+/* entrance porch with steps */
+const porchMat=new THREE.MeshStandardMaterial({color:0xC9C2B4,roughness:1});
+function block(x0,x1,z0,z1,h,mat,y0=0){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(x1-x0,h,z1-z0),mat);
+  m.position.set((x0+x1)/2,y0+h/2,(z0+z1)/2); m.castShadow=true; m.receiveShadow=true; house.add(m); return m;
+}
+block(-1.2,0,7.6,11.0,FLOOR,porchMat);
+for(let i=0;i<3;i++){
+  const x1=-1.2-0.4*i, x0=x1-0.4, h=FLOOR*(3-i)/4, grow=0.35*(i+1);
+  block(x0,x1,7.6-grow,11.0+grow,h,porchMat);
+}
+
+/* terrace: columns and roof */
+const terraceRoof=new THREE.Group(); house.add(terraceRoof);
+const colMat=new THREE.MeshStandardMaterial({color:0xF2EFE8,roughness:.9});
+for(const cx of [8.5,12.95]){
+  const c=new THREE.Mesh(new THREE.BoxGeometry(0.34,H,0.34),colMat);
+  c.position.set(cx,FLOOR-0.06+H/2,19.2); c.castShadow=true; terraceRoof.add(c);
+}
+const roof=new THREE.Mesh(new THREE.BoxGeometry(9.0,0.16,3.7),[inkMat,inkMat,colMat,colMat,colMat,colMat]);
+roof.position.set(4.5+4.5,FLOOR+H+0.08,16+1.8); roof.castShadow=true; roof.receiveShadow=true;
+terraceRoof.add(roof);
+
+/* ---------- furniture ---------- */
+const M=(c,r=.85)=>new THREE.MeshStandardMaterial({color:c,roughness:r});
+const mWood=M(0xE2D1B3), mDark=M(0x80603F), mWhite=M(0xF8F7F3,.55), mBlack=M(0x2B2E36,.45);
+const mMetal=new THREE.MeshStandardMaterial({color:0xBFC6CF,roughness:.3,metalness:.5});
+const mMirror=new THREE.MeshStandardMaterial({color:0xD6E8F5,roughness:.05,metalness:.7});
+const mWater=M(0xA9D2EC,.15);
+const mFab=M(0x6F81BC,1), mSage=M(0x93A889,1), mSand=M(0xD8C7A8,1), mTerra=M(0xB66A4E,1);
+const mGreen=M(0x5E8F51,1), mPot=M(0xA9634A,1), mRug=M(0x9A3E3A,1), mRug2=M(0xC2A06A,1);
+const mLamp=new THREE.MeshStandardMaterial({color:0xFFF3DC,emissive:0xFFD49A,emissiveIntensity:.4,roughness:.8});
+const F=FLOOR, TF=FLOOR-0.06;
+const FACE={'+x':-Math.PI/2,'-x':Math.PI/2,'+z':Math.PI,'-z':0};
+function bx(x0,x1,y0,y1,z0,z1,mat,parent){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(x1-x0,y1-y0,z1-z0),mat);
+  m.position.set((x0+x1)/2,(y0+y1)/2,(z0+z1)/2);
+  m.castShadow=mat!==glassMat; m.receiveShadow=true;
+  (parent||house).add(m); return m;
+}
+function cyl(cx,cz,rt,rb,y0,y1,mat,parent){
+  const m=new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,y1-y0,24),mat);
+  m.position.set(cx,(y0+y1)/2,cz); m.castShadow=true; m.receiveShadow=true;
+  (parent||house).add(m); return m;
+}
+function piece(cx,cz,face,y){
+  const g=new THREE.Group(); g.position.set(cx,y==null?F:y,cz); g.rotation.y=FACE[face]; house.add(g); return g;
+}
+function chair(cx,cz,face,mat,y){
+  const g=piece(cx,cz,face,y); mat=mat||mWood;
+  for(const sx of[-.18,.18])for(const sz of[-.18,.18]) bx(sx-.022,sx+.022,0,.43,sz-.022,sz+.022,mDark,g);
+  bx(-.23,.23,.43,.48,-.23,.23,mat,g);
+  bx(-.23,.23,.48,.95,.18,.23,mat,g);
+}
+function sofa(cx,cz,len,face,mat,y){
+  const g=piece(cx,cz,face,y), h=len/2; mat=mat||mFab;
+  bx(-h,h,.06,.4,-.45,.27,mat,g);
+  bx(-h+.18,h-.18,.4,.52,-.43,.25,mat,g);
+  bx(-h,h,.06,.88,.25,.45,mat,g);
+  bx(-h,-h+.18,.06,.64,-.45,.45,mat,g);
+  bx(h-.18,h,.06,.64,-.45,.45,mat,g);
+  for(const sx of[-h+.08,h-.08])for(const sz of[-.37,.37]) bx(sx-.03,sx+.03,0,.06,sz-.03,sz+.03,mDark,g);
+}
+function table(x0,x1,z0,z1,h,mat,y){
+  y=y==null?F:y; mat=mat||mWood;
+  bx(x0,x1,y+h-.05,y+h,z0,z1,mat);
+  for(const x of[x0+.09,x1-.09])for(const z of[z0+.09,z1-.09]) bx(x-.035,x+.035,y,y+h-.05,z-.035,z+.035,mDark);
+}
+function roundTable(cx,cz,r,h,y){
+  y=y==null?F:y;
+  cyl(cx,cz,r,r,y+h-.04,y+h,mWood); cyl(cx,cz,.045,.045,y,y+h-.04,mDark); cyl(cx,cz,r*.45,r*.5,y,y+.03,mDark);
+}
+function plant(cx,cz,s,y){
+  s=s||1; y=y==null?F:y;
+  cyl(cx,cz,.19*s,.14*s,y,y+.36*s,mPot);
+  const a=new THREE.Mesh(new THREE.SphereGeometry(.34*s,16,12),mGreen);
+  a.position.set(cx,y+.72*s,cz); a.castShadow=true; house.add(a);
+  const b=a.clone(); b.scale.setScalar(.68); b.position.set(cx+.1*s,y+1.1*s,cz-.06*s); house.add(b);
+}
+function bed(cx,cz,len,wid,face,blanket){
+  const g=piece(cx,cz,face), l=len/2, w=wid/2;
+  bx(-w,w,.06,.34,-l,l,mWood,g);
+  bx(-w+.03,w-.03,.34,.54,-l+.03,l-.1,mWhite,g);
+  bx(-w-.04,w+.04,0,1.1,l-.1,l,mDark,g);
+  bx(-w+.01,w-.01,.54,.58,-l+.02,l-.78,blanket,g);
+  bx(-w+.01,w-.01,.28,.58,-l-.01,-l+.03,blanket,g);
+  if(wid>1.3){bx(-w+.12,-.06,.54,.67,l-.58,l-.18,mWhite,g);bx(.06,w-.12,.54,.67,l-.58,l-.18,mWhite,g);}
+  else bx(-w+.15,w-.15,.54,.67,l-.58,l-.18,mWhite,g);
+  for(const sx of[-w+.06,w-.06])for(const sz of[-l+.06,l-.16]) bx(sx-.03,sx+.03,0,.06,sz-.03,sz+.03,mDark,g);
+}
+function nightstand(cx,cz){
+  bx(cx-.22,cx+.22,F,F+.5,cz-.22,cz+.22,mWood);
+  cyl(cx,cz,.07,.08,F+.5,F+.53,mDark); cyl(cx,cz,.012,.012,F+.53,F+.75,mDark); cyl(cx,cz,.09,.14,F+.72,F+.9,mLamp);
+}
+function cabinet(x0,x1,z0,z1,front,h,y0,mat){
+  y0=y0==null?F:y0; mat=mat||mWood;
+  bx(x0,x1,y0,y0+h,z0,z1,mat);
+  const alongX=front==='z0'||front==='z1';
+  const a0=alongX?x0:z0, a1=alongX?x1:z1, n=Math.max(1,Math.round((a1-a0)/.55)), step=(a1-a0)/n;
+  const hy=y0+(h>1.5?1.0:Math.max(.08,h-.33)), hl=Math.min(.28,h*.3);
+  const hand=[];
+  for(let i=1;i<n;i++){
+    const p=a0+i*step;
+    if(alongX){const z=front==='z0'?z0-.004:z1+.004; bx(p-.008,p+.008,y0+.04,y0+h-.04,z-.004,z+.004,mDark);}
+    else{const x=front==='x0'?x0-.004:x1+.004; bx(x-.004,x+.004,y0+.04,y0+h-.04,p-.008,p+.008,mDark);}
+    hand.push(p-.07,p+.07);
+  }
+  if(n===1) hand.push(a1-.1);
+  for(const p of hand){
+    if(alongX){const z=front==='z0'?z0-.02:z1+.02; bx(p-.012,p+.012,hy,hy+hl,z-.012,z+.012,mMetal);}
+    else{const x=front==='x0'?x0-.02:x1+.02; bx(x-.012,x+.012,hy,hy+hl,p-.012,p+.012,mMetal);}
+  }
+}
+function shelves(x0,x1,z0,z1,h){
+  h=h||2.0; const alongX=(x1-x0)>(z1-z0);
+  for(const y of[.04,.5,.96,1.42,1.9]) bx(x0,x1,F+y,F+y+.03,z0,z1,mWood);
+  if(alongX){bx(x0,x0+.03,F,F+h,z0,z1,mWood);bx(x1-.03,x1,F,F+h,z0,z1,mWood);}
+  else{bx(x0,x1,F,F+h,z0,z0+.03,mWood);bx(x0,x1,F,F+h,z1-.03,z1,mWood);}
+  const cols=[mTerra,mSand,mWhite,mFab,mSage];
+  const len=alongX?x1-x0:z1-z0, dep=(alongX?z1-z0:x1-x0)*.7, mid=alongX?(z0+z1)/2:(x0+x1)/2;
+  let k=0;
+  for(const y of[.07,.53,.99,1.45]){
+    for(let p=.12;p<len-.32;p+=.4+((k*37)%5)*.04){
+      const hh=.16+((k*13)%4)*.05, ww=.16+((k*7)%3)*.06, c=cols[k%cols.length]; k++;
+      if(alongX) bx(x0+p,x0+p+ww,F+y,F+y+hh,mid-dep/2,mid+dep/2,c);
+      else bx(mid-dep/2,mid+dep/2,F+y,F+y+hh,z0+p,z0+p+ww,c);
+    }
+  }
+}
+function toilet(cx,cz,face){
+  const g=piece(cx,cz,face);
+  bx(-.18,.18,0,.4,-.32,.18,mWhite,g);
+  bx(-.2,.2,.4,.43,-.34,.16,mWhite,g);
+  bx(-.21,.21,.3,.8,.18,.36,mWhite,g);
+}
+function vanity(cx,cz,face,w){
+  const g=piece(cx,cz,face), h=w/2;
+  bx(-h,h,.1,.8,-.24,.22,mWood,g);
+  bx(-h+.07,h-.07,.8,.87,-.22,.2,mWhite,g);
+  bx(-.02,.02,.87,1.0,.13,.17,mMetal,g);
+  bx(-h+.06,h-.06,1.1,1.85,.22,.24,mMirror,g);
+}
+function washer(cx,cz,face){
+  const g=piece(cx,cz,face);
+  bx(-.3,.3,0,.85,-.3,.3,mWhite,g);
+  const d=new THREE.Mesh(new THREE.CylinderGeometry(.19,.19,.03,24),mBlack);
+  d.rotation.x=Math.PI/2; d.position.set(0,.45,-.31); g.add(d);
+}
+
+/* зал */
+bx(1.5,5.3,F,F+.015,1.5,4.8,mRug);
+bx(1.75,5.05,F+.015,F+.02,1.75,4.55,mRug2);
+bx(2.0,4.8,F+.02,F+.025,2.0,4.3,mRug);
+sofa(3.4,0.62,3.2,'+z');
+sofa(6.25,2.4,.95,'-x');
+sofa(6.25,3.9,.95,'-x');
+table(2.8,4.0,2.4,3.2,.42,mDark);
+cyl(3.4,2.8,.12,.08,F+.42,F+.5,mTerra);
+cabinet(0.15,0.6,2.2,5.2,'x1',.75,F,mWood);
+cyl(0.38,3.7,.07,.1,F+.75,F+1.05,mTerra);
+cabinet(2.6,5.2,6.4,6.88,'z0',.5,F,mDark);
+bx(3.75,4.05,F+.5,F+.56,6.55,6.75,mBlack);
+bx(3.0,4.8,F+.56,F+1.6,6.63,6.68,mBlack);
+cyl(5.4,0.45,.14,.14,F,F+.03,mDark); cyl(5.4,0.45,.015,.015,F,F+1.55,mDark); cyl(5.4,0.45,.15,.21,F+1.5,F+1.75,mLamp);
+plant(0.5,0.5,1.2); plant(6.35,0.5,1.1); plant(0.5,6.5,1.0);
+
+/* ванная (санузел) */
+bx(6.88,7.95,F,F+.06,0.15,1.2,mWhite);
+bx(7.93,7.96,F+.06,F+2.0,0.15,1.2,glassMat);
+bx(6.88,7.45,F+.06,F+2.0,1.18,1.21,glassMat);
+bx(7.13,7.17,F+1.0,F+2.05,0.15,0.19,mMetal);
+cyl(7.15,0.32,.1,.08,F+2.0,F+2.04,mMetal);
+toilet(8.56,1.9,'-x');
+vanity(8.685,3.3,'-x',.8);
+washer(7.18,2.75,'+x');
+
+/* чулан */
+shelves(6.88,7.28,4.5,6.9);
+shelves(8.52,8.92,4.5,6.9);
+
+/* ванна */
+bx(9.07,10.95,F,F+.56,0.15,0.88,mWhite);
+bx(9.15,10.87,F+.4,F+.565,0.23,0.8,mWater);
+bx(9.95,10.05,F+.56,F+.75,0.15,0.22,mMetal);
+vanity(10.885,1.6,'-x',.7);
+
+/* гардероб */
+cabinet(12.45,13.05,0.15,2.5,'x0',2.2);
+cabinet(11.27,12.45,0.15,0.75,'z1',2.2);
+cyl(11.85,1.6,.25,.25,F,F+.42,mSand);
+bx(11.27,11.29,F+.2,F+1.9,1.0,1.9,mMirror);
+
+/* спальня у ванной */
+bed(10.12,4.8,2.1,1.8,'+x',mFab);
+nightstand(9.3,3.62); nightstand(9.3,5.98);
+cabinet(11.4,12.8,6.45,6.93,'z0',.85);
+sofa(12.6,5.9,.9,'-x',mSand);
+bx(11.3,12.0,F,F+.015,4.0,5.6,mRug2);
+
+/* холл */
+cabinet(0.15,0.55,7.15,8.4,'x1',.45);
+bx(0.15,0.55,F+.45,F+.5,7.15,8.4,mSand);
+cabinet(0.15,0.65,10.0,11.3,'x1',2.1);
+bx(1.8,5.2,F,F+.015,8.0,10.4,mRug2);
+bx(2.05,4.95,F+.015,F+.02,8.25,10.15,mRug);
+cabinet(3.0,4.6,10.9,11.32,'z0',.8,F,mDark);
+bx(3.2,4.4,F+1.1,F+1.95,11.31,11.33,mMirror);
+cyl(3.4,11.1,.06,.09,F+.8,F+1.1,mTerra);
+plant(6.3,7.45,1.1); plant(10.92,7.42,.9); plant(10.85,10.95,1.0);
+
+/* спальня справа */
+bed(13.7,10.28,2.1,1.8,'-z',mSage);
+nightstand(12.53,11.08); nightstand(14.87,11.08);
+cabinet(11.3,13.1,7.07,7.67,'z1',2.2);
+table(14.6,15.15,7.8,9.2,.75);
+chair(14.2,8.5,'+x',mSand);
+
+/* кухня */
+cabinet(0.15,0.75,11.47,15.4,'x1',.86,F,mWhite);
+bx(0.15,0.79,F+.86,F+.9,11.47,15.4,mDark);
+cabinet(2.2,3.6,11.47,12.07,'z1',.86,F,mWhite);
+bx(2.2,3.6,F+.86,F+.9,11.47,12.11,mDark);
+cabinet(3.68,4.38,11.47,12.17,'z1',1.95,F,mMetal);
+bx(0.22,0.72,F+.9,F+.92,12.4,13.0,mBlack);
+bx(0.15,0.68,F+1.6,F+1.72,12.38,13.02,mMetal);
+bx(0.28,0.66,F+.9,F+.915,13.4,14.1,mMetal);
+cyl(0.22,13.75,.015,.015,F+.9,F+1.18,mMetal);
+cabinet(0.15,0.5,11.47,12.33,'x1',.7,F+1.5,mWhite);
+cabinet(0.15,0.5,14.6,15.4,'x1',.7,F+1.5,mWhite);
+cabinet(2.2,3.6,11.47,11.82,'z1',.7,F+1.5,mWhite);
+table(1.5,3.3,15.9,18.5,.76);
+for(const z of[16.4,17.2,18.0]){chair(1.22,z,'+x',mSand);chair(3.58,z,'-x',mSand);}
+chair(2.4,15.62,'+z',mSand); chair(2.4,18.78,'-z',mSand);
+cyl(2.4,17.2,.18,.1,F+.76,F+.84,mTerra);
+plant(4.05,19.0,1.0);
+
+/* кладовая */
+shelves(6.2,6.66,11.5,15.85);
+shelves(4.6,6.15,11.47,11.9);
+shelves(4.6,6.15,15.45,15.88);
+
+/* спальня у террасы */
+bed(10.07,13.8,2.0,1.6,'+x',mTerra);
+nightstand(9.3,12.73); nightstand(9.3,14.87);
+cabinet(11.1,13.05,11.47,12.07,'z1',2.2);
+sofa(12.55,15.35,.9,'-z',mSage);
+
+/* терраса */
+table(9.0,11.2,17.1,18.2,.74,mWood,TF);
+for(const x of[9.4,10.1,10.8]){chair(x,16.85,'+z',mWood,TF);chair(x,18.45,'-z',mWood,TF);}
+chair(8.75,17.65,'+x',mWood,TF); chair(11.45,17.65,'-x',mWood,TF);
+sofa(5.25,18.2,.9,'+x',mSage,TF); sofa(6.75,18.2,.9,'-x',mSage,TF);
+roundTable(6.0,18.2,.3,.45,TF);
+plant(4.9,16.4,1.0,TF); plant(12.85,16.45,1.0,TF); plant(12.4,19.05,.9,TF); plant(4.9,19.05,.9,TF);
+
+/* крыльцо */
+plant(-0.85,7.9,.8); plant(-0.85,10.7,.8);
+
+/* ---------- camera views ---------- */
+function fitDist(w,h){
+  const v=THREE.MathUtils.degToRad(camera.fov)/2;
+  return Math.max((h/2)/Math.tan(v),(w/2)/Math.tan(v)/camera.aspect)*1.1;
+}
+function view3d(){
+  const d=Math.max(fitDist(23,21),24);
+  const dir=new THREE.Vector3(0.5,0.78,0.95).normalize();
+  return {pos:dir.multiplyScalar(d),target:new THREE.Vector3(0,0.8,0)};
+}
+function viewTop(){
+  return {pos:new THREE.Vector3(0,fitDist(19,21.5),0.01),target:new THREE.Vector3(0,0,0)};
+}
+let tw=null, mode='3d';
+function flyTo(v){
+  if(reduceMotion){camera.position.copy(v.pos);controls.target.copy(v.target);controls.update();return;}
+  tw={p0:camera.position.clone(),t0:controls.target.clone(),p1:v.pos,t1:v.target,start:performance.now(),dur:900};
+}
+
+/* ---------- UI ---------- */
+const b3d=document.getElementById('b3d'), btop=document.getElementById('btop');
+const bcut=document.getElementById('bcut');
+let wallK=1, wallTarget=1;
+b3d.onclick=()=>{mode='3d';b3d.setAttribute('aria-pressed','true');btop.setAttribute('aria-pressed','false');flyTo(view3d());};
+btop.onclick=()=>{mode='top';btop.setAttribute('aria-pressed','true');b3d.setAttribute('aria-pressed','false');flyTo(viewTop());};
+bcut.onclick=()=>{
+  const on=bcut.getAttribute('aria-pressed')!=='true';
+  bcut.setAttribute('aria-pressed',String(on));
+  wallTarget=on?0.36:1;
+  if(reduceMotion) wallK=wallTarget;
+};
+const hint=document.getElementById('hint');
+const hideHint=()=>hint.classList.add('gone');
+canvas.addEventListener('pointerdown',hideHint,{once:true});
+setTimeout(hideHint,9000);
+
+/* ---------- loop ---------- */
+function resize(){
+  const w=window.innerWidth, h=window.innerHeight;
+  renderer.setSize(w,h,false);
+  camera.aspect=w/h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize',resize);
+resize();
+const start=view3d();
+camera.position.copy(start.pos); controls.target.copy(start.target); controls.update();
+
+function ease(t){return t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;}
+function loop(now){
+  if(tw){
+    const k=Math.min(1,(now-tw.start)/tw.dur), e=ease(k);
+    camera.position.lerpVectors(tw.p0,tw.p1,e);
+    controls.target.lerpVectors(tw.t0,tw.t1,e);
+    if(k>=1) tw=null;
+  }
+  if(Math.abs(wallK-wallTarget)>0.001){
+    wallK+= (wallTarget-wallK)*0.12;
+    if(Math.abs(wallK-wallTarget)<0.002) wallK=wallTarget;
+  }
+  for(const w of walls) w.scale.y=wallK;
+  terraceRoof.visible=wallK>0.9;
+  controls.update();
+  renderer.render(scene,camera);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
